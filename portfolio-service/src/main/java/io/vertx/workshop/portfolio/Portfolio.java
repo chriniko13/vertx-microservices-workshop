@@ -12,7 +12,7 @@ import java.util.TreeMap;
 @DataObject(generateConverter = true)
 public class Portfolio {
 
-  private Map<String, Integer> shares = new TreeMap<>();
+  private Map<String /*quote name*/, Integer> shares = new TreeMap<>();
 
   private double cash;
 

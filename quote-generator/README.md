@@ -15,3 +15,8 @@ mvn clean package
 ```
 java -jar target/quote-generator-1.0-SNAPSHOT-fat.jar
 ```
+
+## Useful
+
+* `http://localhost:35000/?name=Divinator`
+* `http://localhost:35000/`

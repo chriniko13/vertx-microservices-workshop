@@ -44,4 +44,3 @@ CompositeFuture.all(marketFuture, portfolioFuture).setHandler( { ar ->
     });
   }
 });
-

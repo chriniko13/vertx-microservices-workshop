@@ -1,13 +1,19 @@
 package io.vertx.workshop.portfolio.impl;
 
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.*;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.HttpClient;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.servicediscovery.ServiceDiscovery;
+import io.vertx.servicediscovery.types.HttpEndpoint;
 import io.vertx.workshop.portfolio.Portfolio;
 import io.vertx.workshop.portfolio.PortfolioService;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -30,23 +36,49 @@ public class PortfolioServiceImpl implements PortfolioService {
 
   @Override
   public void getPortfolio(Handler<AsyncResult<Portfolio>> resultHandler) {
-    // TODO
+    // TODO [DONE]
     // ----
+
+    resultHandler.handle(Future.succeededFuture(portfolio));
 
     // ----
   }
 
   private void sendActionOnTheEventBus(String action, int amount, JsonObject quote, int newAmount) {
-    // TODO
+    // TODO [DONE]
     // ----
+
+    vertx.eventBus().publish(
+            EVENT_ADDRESS,
+            new JsonObject()
+                    .put("action", action)
+                    .put("quote", quote)
+                    .put("date", Instant.now().toEpochMilli())
+                    .put("amount", amount)
+                    .put("owned", newAmount)
+    );
 
     // ----
   }
 
   @Override
   public void evaluate(Handler<AsyncResult<Double>> resultHandler) {
-    // TODO
+    // TODO [DONE]
     // ----
+
+    // use quote-generator
+    HttpEndpoint.getWebClient(discovery, new JsonObject().put("name", "quotes"), clientEvent -> {
+
+      if (clientEvent.succeeded()) {
+
+        WebClient webClient = clientEvent.result();
+        computeEvaluation(webClient, resultHandler);
+
+      } else {
+        Throwable cause = clientEvent.cause();
+        resultHandler.handle(Future.failedFuture(cause));
+      }
+    });
 
     // ---
   }
@@ -54,24 +86,60 @@ public class PortfolioServiceImpl implements PortfolioService {
   private void computeEvaluation(WebClient webClient, Handler<AsyncResult<Double>> resultHandler) {
     // We need to call the service for each company we own shares
     List<Future> results = portfolio.getShares().entrySet().stream()
-        .map(entry -> getValueForCompany(webClient, entry.getKey(), entry.getValue()))
-        .collect(Collectors.toList());
+            .map(entry -> getValueForCompany(webClient, entry.getKey(), entry.getValue()))
+            .collect(Collectors.toList());
 
     // We need to return only when we have all results, for this we create a composite future. The set handler
     // is called when all the futures has been assigned.
     CompositeFuture.all(results).setHandler(
-        ar -> {
-          double sum = results.stream().mapToDouble(fut -> (double) fut.result()).sum();
-          resultHandler.handle(Future.succeededFuture(sum));
-        });
+            ar -> {
+              double sum = results.stream().mapToDouble(fut -> (double) fut.result()).sum();
+              resultHandler.handle(Future.succeededFuture(sum));
+            });
   }
 
   private Future<Double> getValueForCompany(WebClient client, String company, int numberOfShares) {
     // Create the future object that will  get the value once the value have been retrieved
     Future<Double> future = Future.future();
 
-    //TODO
+    //TODO [DONE]
     //----
+    client.get("/?name=" + encode(company)).send(responseEvent -> {
+
+      if (responseEvent.succeeded()) {
+
+
+        HttpResponse<Buffer> bufferHttpResponse = responseEvent.result();
+
+        int statusCode = bufferHttpResponse.statusCode();
+        if (statusCode == 200) {
+
+          @Nullable JsonObject jsonObject = bufferHttpResponse.bodyAsJsonObject();
+        /*
+          Response sample:
+            {
+              "exchange" : "vert.x stock exchange",
+              "symbol" : "BCT",
+              "name" : "Black Coat",
+              "bid" : 1.0,
+              "ask" : 1.0,
+              "volume" : 90000,
+              "open" : 550.0,
+              "shares" : 89999
+            }
+         */
+          double result = numberOfShares * jsonObject.getDouble("bid");
+          future.complete(result);
+
+        } else {
+          future.complete(0.0D);
+        }
+
+      } else {
+        future.fail(responseEvent.cause());
+      }
+
+    });
 
     // ---
 
@@ -83,13 +151,13 @@ public class PortfolioServiceImpl implements PortfolioService {
   public void buy(int amount, JsonObject quote, Handler<AsyncResult<Portfolio>> resultHandler) {
     if (amount <= 0) {
       resultHandler.handle(Future.failedFuture("Cannot buy " + quote.getString("name") + " - the amount must be " +
-          "greater than 0"));
+              "greater than 0"));
       return;
     }
 
     if (quote.getInteger("shares") < amount) {
       resultHandler.handle(Future.failedFuture("Cannot buy " + amount + " - not enough " +
-          "stocks on the market (" + quote.getInteger("shares") + ")"));
+              "stocks on the market (" + quote.getInteger("shares") + ")"));
       return;
     }
 
@@ -106,7 +174,7 @@ public class PortfolioServiceImpl implements PortfolioService {
       resultHandler.handle(Future.succeededFuture(portfolio));
     } else {
       resultHandler.handle(Future.failedFuture("Cannot buy " + amount + " of " + name + " - " + "not enough money, " +
-          "need " + price + ", has " + portfolio.getCash()));
+              "need " + price + ", has " + portfolio.getCash()));
     }
   }
 
@@ -115,7 +183,7 @@ public class PortfolioServiceImpl implements PortfolioService {
   public void sell(int amount, JsonObject quote, Handler<AsyncResult<Portfolio>> resultHandler) {
     if (amount <= 0) {
       resultHandler.handle(Future.failedFuture("Cannot sell " + quote.getString("name") + " - the amount must be " +
-          "greater than 0"));
+              "greater than 0"));
       return;
     }
 
@@ -136,7 +204,7 @@ public class PortfolioServiceImpl implements PortfolioService {
       resultHandler.handle(Future.succeededFuture(portfolio));
     } else {
       resultHandler.handle(Future.failedFuture("Cannot sell " + amount + " of " + name + " - " + "not enough stocks " +
-          "in portfolio"));
+              "in portfolio"));
     }
 
   }

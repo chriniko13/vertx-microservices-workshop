@@ -4,6 +4,7 @@ import io.vertx.core.Future;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.sql.ResultSet;
 import io.vertx.ext.sql.UpdateResult;
 import io.vertx.rxjava.core.eventbus.MessageConsumer;
 import io.vertx.rxjava.core.http.HttpServer;
@@ -45,16 +46,30 @@ public class AuditVerticle extends RxMicroServiceVerticle {
     // creates the jdbc client.
     jdbc = JDBCClient.createNonShared(vertx, config());
 
-    // TODO
+    // TODO [DONE]
     // ----
-    Single<MessageConsumer<JsonObject>> readySingle = Single.error(new UnsupportedOperationException("not yet implemented"));
+    Single<Void> databaseReady = initializeDatabase(config().getBoolean("drop", false));
+
+    Single<Void> httpEndpointReady = configureTheHTTPServer()
+            .flatMap(server -> rxPublishHttpEndpoint("audit", "localhost", server.actualPort()));
+
+    Single<MessageConsumer<JsonObject>> messageConsumerReady = retrieveThePortfolioMessageSource();
+
+    Single<MessageConsumer<JsonObject>> readySingle = Single.zip(
+            databaseReady,
+            httpEndpointReady,
+            messageConsumerReady,
+            (db, http, consumer) -> consumer);
+
     // ----
 
     readySingle.doOnSuccess(consumer -> {
       // on success we set the handler that will store message in the database
+      System.out.println("will set the consumption of message source now...");
       consumer.handler(message -> storeInDatabase(message.body()));
     }).subscribe(consumer -> {
       // complete the verticle start with a success
+      System.out.println("audit verticle ready!");
       future.complete();
     }, error -> {
       // signal a verticle start failure
@@ -76,20 +91,69 @@ public class AuditVerticle extends RxMicroServiceVerticle {
     // 4. close the connection
     // 5. return this list in the response
 
-    //TODO
+    //TODO [DONE]
     // ----
+
+    jdbc.getConnection(connEvent -> {
+
+      if (connEvent.succeeded()) {
+
+        connEvent.result().query(SELECT_STATEMENT, queryEvent -> {
+
+          if (queryEvent.succeeded()) {
+            ResultSet rs = queryEvent.result();
+
+            List<JsonObject> operations = rs
+                    .getRows()
+                    .stream()
+                    .map(json -> new JsonObject(json.getString("OPERATION")))
+                    .collect(Collectors.toList());
+
+            String result = Json.encodePrettily(operations);
+            System.out.println("query: " + result);
+
+            context.response().setStatusCode(200).end(result);
+
+          } else {
+            System.out.println("could not query...");
+            Throwable cause = connEvent.cause();
+            handleError(context, cause);
+          }
+
+        });
+
+        connEvent.result().close(closeEvent -> {
+          System.out.println("db connection released successfully");
+        });
+
+      } else {
+        Throwable cause = connEvent.cause();
+        handleError(context, cause);
+      }
+
+    });
 
     // ----
   }
 
+  private void handleError(RoutingContext routingContext, Throwable cause) {
+    cause.printStackTrace();
+    routingContext.fail(cause);
+  }
+
   private Single<HttpServer> configureTheHTTPServer() {
 
-    //TODO
+    //TODO [DONE]
     //----
-    Single<HttpServer> httpServerSingle = Single.error(new UnsupportedOperationException("not yet implemented"));
+    Router router = Router.router(vertx);
+    router.get("/").handler(this::retrieveOperations);
+
+    return vertx.createHttpServer()
+            .requestHandler(router::accept)
+            .rxListen(config().getInteger("http.port", 0));
+
     //----
 
-    return httpServerSingle;
   }
 
   private Single<MessageConsumer<JsonObject>> retrieveThePortfolioMessageSource() {
@@ -107,11 +171,13 @@ public class AuditVerticle extends RxMicroServiceVerticle {
     Single<SQLConnection> connectionRetrieved = jdbc.rxGetConnection();
 
     // Step 2, when the connection is retrieved (this may have failed), do the insertion (upon success)
-    Single<UpdateResult> update = connectionRetrieved.flatMap(connection -> connection
-        .rxUpdateWithParams(INSERT_STATEMENT, new JsonArray().add(operation.encode()))
-
-        // Step 3, when the insertion is done, close the connection.
-        .doAfterTerminate(connection::close));
+    Single<UpdateResult> update = connectionRetrieved
+            .flatMap(
+                    connection -> connection
+                            .rxUpdateWithParams(INSERT_STATEMENT, new JsonArray().add(operation.encode()))
+                            // Step 3, when the insertion is done, close the connection.
+                            .doAfterTerminate(connection::close)
+            );
 
     update.subscribe(result -> {
       // Ok
@@ -138,24 +204,24 @@ public class AuditVerticle extends RxMicroServiceVerticle {
 
     // Ok, now it's time to chain all these actions:
     Single<List<Integer>> resultSingle = connectionRetrieved
-        .flatMap(conn -> {
-          // When the connection is retrieved
+            .flatMap(conn -> {
+              // When the connection is retrieved
 
-          // Prepare the batch
-          List<String> batch = new ArrayList<>();
-          if (drop) {
-            // When the table is dropped, we recreate it
-            batch.add(DROP_STATEMENT);
-          }
-          // Just create the table
-          batch.add(CREATE_TABLE_STATEMENT);
+              // Prepare the batch
+              List<String> batch = new ArrayList<>();
+              if (drop) {
+                // When the table is dropped, we recreate it
+                batch.add(DROP_STATEMENT);
+              }
+              // Just create the table
+              batch.add(CREATE_TABLE_STATEMENT);
 
-          // We compose with a statement batch
-          Single<List<Integer>> next = conn.rxBatch(batch);
+              // We compose with a statement batch
+              Single<List<Integer>> next = conn.rxBatch(batch);
 
-          // Whatever the result, if the connection has been retrieved, close it
-          return next.doAfterTerminate(conn::close);
-        });
+              // Whatever the result, if the connection has been retrieved, close it
+              return next.doAfterTerminate(conn::close);
+            });
 
     return resultSingle.map(list -> null);
   }
